@@ -1,0 +1,53 @@
+diff --git a/server.py b/server.py
+index 32c7240..69b8cf0 100644
+--- a/server.py
++++ b/server.py
+@@ -12,0 +13 @@ import queue
++import ssl
+@@ -240,2 +241,6 @@ class KyutaiBridgeServer:
+-    async def run(self, port: int) -> None:
+-        print(f"[DuplexCascade] Server listening on 0.0.0.0:{int(port)}", flush=True)
++    async def run(self, port: int, ssl_context: Optional[ssl.SSLContext] = None) -> None:
++        scheme = "https" if ssl_context is not None else "http"
++        print(
++            f"[DuplexCascade] Server listening on {scheme}://0.0.0.0:{int(port)}",
++            flush=True,
++        )
+@@ -245,0 +251 @@ class KyutaiBridgeServer:
++            ssl=ssl_context,
+@@ -740,0 +747,12 @@ def get_args() -> argparse.Namespace:
++    p.add_argument(
++        "--ssl-certfile",
++        type=Path,
++        default=None,
++        help="TLS certificate chain file in PEM format (for example, fullchain.pem)",
++    )
++    p.add_argument(
++        "--ssl-keyfile",
++        type=Path,
++        default=None,
++        help="TLS private key file in PEM format (for example, privkey.pem)",
++    )
+@@ -757,0 +776,17 @@ def main() -> None:
++
++    if (args.ssl_certfile is None) != (args.ssl_keyfile is None):
++        raise ValueError("--ssl-certfile and --ssl-keyfile must be specified together")
++
++    ssl_context: Optional[ssl.SSLContext] = None
++    if args.ssl_certfile is not None and args.ssl_keyfile is not None:
++        if not args.ssl_certfile.is_file():
++            raise FileNotFoundError(f"SSL certificate file not found: {args.ssl_certfile}")
++        if not args.ssl_keyfile.is_file():
++            raise FileNotFoundError(f"SSL private key file not found: {args.ssl_keyfile}")
++        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
++        ssl_context.load_cert_chain(
++            certfile=str(args.ssl_certfile),
++            keyfile=str(args.ssl_keyfile),
++        )
++
+@@ -816 +851 @@ def main() -> None:
+-    asyncio.run(server.run(args.port))
++    asyncio.run(server.run(args.port, ssl_context=ssl_context))
+@@ -821 +855,0 @@ if __name__ == "__main__":
+-

@@ -1,0 +1,218 @@
+From c70332fcdb352afc370517f8f60e1b1466aa6d44 Mon Sep 17 00:00:00 2001
+From: ryfukuda <ryo.fukuda@ntt.com>
+Date: Fri, 19 Jun 2026 15:57:28 +0900
+Subject: [PATCH] Fix server: disconnect users in background
+
+---
+ .gitignore       |   2 +
+ bin/inference.py |   4 +-
+ bin/server.py    | 144 ++++++++++++++++++++++++++++++++++++++++-------
+ 3 files changed, 128 insertions(+), 22 deletions(-)
+ create mode 100644 .gitignore
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..372c13e
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++__pycache__/
++
+diff --git a/bin/inference.py b/bin/inference.py
+index f0d9046..a0cc200 100644
+--- a/bin/inference.py
++++ b/bin/inference.py
+@@ -23,8 +23,8 @@ from torch.utils.data import DataLoader
+ 
+ from models.pipeline import inferencePipeline
+ from models.decoder.llm2tts import llm2TTS
+-from web.parms import GlobalParams
+-from web.pool import TTSObjectPool
++# from web.parms import GlobalParams
++# from web.pool import TTSObjectPool
+ 
+ def get_args():
+     parser = argparse.ArgumentParser(description='Freeze-Omni')
+diff --git a/bin/server.py b/bin/server.py
+index 533b5fd..849b304 100644
+--- a/bin/server.py
++++ b/bin/server.py
+@@ -69,6 +69,74 @@ app = Flask(__name__, template_folder='../web/resources')
+ socketio = SocketIO(app)
+ # init connected users
+ connected_users = {}
++disconnecting_users = set()
++
++
++def active_user_count():
++    return sum(
++        1 for sid in connected_users
++        if sid not in disconnecting_users
++    )
++
++
++def finish_disconnect(sid, timer, params, reason="disconnect"):
++    """Finish cleanup without blocking Socket.IO disconnect handler."""
++    try:
++        # Give send_pcm() a short chance to observe stop_pcm and exit.
++        time.sleep(0.5)
++
++        # Remove from connected_users before release()
++        if sid in connected_users and connected_users[sid][1] is params:
++            del connected_users[sid]
++            print(f"DEBUG: removed {sid} from connected_users")
++
++        disconnecting_users.discard(sid)
++
++        try:
++            print(f"DEBUG: release begin sid={sid}, reason={reason}")
++            params.release()
++            print(f"DEBUG: release end sid={sid}, reason={reason}")
++        except Exception as e:
++            print(f"WARNING: release failed sid={sid}: {repr(e)}")
++
++    finally:
++        disconnecting_users.discard(sid)
++        tts_pool.print_info()
++        pipeline_pool.print_info()
++        print(f"User {sid} disconnected")
++
++
++def start_disconnect_cleanup(sid, reason="disconnect", emit_timeout=False):
++    if sid not in connected_users:
++        return
++
++    timer, params = connected_users[sid]
++
++    disconnecting_users.add(sid)
++
++    try:
++        if emit_timeout:
++            socketio.emit('out_time', to=sid)
++    except Exception as e:
++        print(f"WARNING: failed to emit out_time sid={sid}: {repr(e)}")
++
++    try:
++        timer.cancel()
++    except Exception as e:
++        print(f"WARNING: timer cancel failed sid={sid}: {repr(e)}")
++
++    # Stop all worker loops explicitly.
++    params.stop_pcm = True
++    params.stop_generate = True
++    params.stop_tts = True
++
++    cleanup_thread = threading.Thread(
++        target=finish_disconnect,
++        args=(sid, timer, params, reason),
++        daemon=True,
++    )
++    cleanup_thread.start()
++
+ 
+ def decoder(cur_hidden_state, cur_text, outputs, connected_users, sid, generate_num, last_text, is_last_chunk=False):
+     """
+@@ -298,24 +366,51 @@ def send_pcm(sid):
+             send_dict['feature'] = res['feature']
+             outputs = llm_prefill(send_dict, outputs, sid)
+ 
++# def disconnect_user(sid):
++#     if sid in connected_users:
++#         print(f"Disconnecting user {sid} due to time out")
++#         socketio.emit('out_time', to=sid) 
++#         connected_users[sid][0].cancel()
++#         connected_users[sid][1].interrupt()
++#         connected_users[sid][1].stop_pcm = True
++#         connected_users[sid][1].release()
++#         time.sleep(3)
++#         del connected_users[sid]
+ def disconnect_user(sid):
+-    if sid in connected_users:
+-        print(f"Disconnecting user {sid} due to time out")
+-        socketio.emit('out_time', to=sid) 
+-        connected_users[sid][0].cancel()
+-        connected_users[sid][1].interrupt()
+-        connected_users[sid][1].stop_pcm = True
+-        connected_users[sid][1].release()
+-        time.sleep(3)
+-        del connected_users[sid]
++    print(f"Disconnecting user {sid} due to time out")
++    start_disconnect_cleanup(
++        sid,
++        reason="timeout",
++        emit_timeout=True,
++    )
+ 
+ @app.route('/')
+ def index():
+     return render_template('demo.html')
+ 
+ @socketio.on('connect')
++# def handle_connect():
++#     if len(connected_users) >= MAX_USERS:
++#         print('Too many users connected, disconnecting new user')
++#         emit('too_many_users')
++#         return
++#
++#     sid = request.sid
++#     connected_users[sid] = []
++#     connected_users[sid].append(Timer(TIMEOUT, disconnect_user, [sid]))
++#     connected_users[sid].append(GlobalParams(tts_pool, pipeline_pool))
++#     connected_users[sid][0].start()
++#     pcm_thread = threading.Thread(target=send_pcm, args=(sid,))
++#     pcm_thread.start()
++#     tts_pool.print_info()
++#     pipeline_pool.print_info()
++#     print(f'User {sid} connected')
+ def handle_connect():
+-    if len(connected_users) >= MAX_USERS:
++    print(
++        f"DEBUG: connected_users = {connected_users} "
++        f"({len(connected_users)} total, {active_user_count()} active)"
++    )
++    if active_user_count() >= MAX_USERS:
+         print('Too many users connected, disconnecting new user')
+         emit('too_many_users')
+         return
+@@ -331,19 +426,28 @@ def handle_connect():
+     pipeline_pool.print_info()
+     print(f'User {sid} connected')
+ 
++
+ @socketio.on('disconnect')
++# def handle_disconnect():
++#     sid = request.sid
++#     if sid in connected_users:
++#         connected_users[sid][0].cancel()
++#         connected_users[sid][1].interrupt()
++#         connected_users[sid][1].stop_pcm = True
++#         connected_users[sid][1].release()
++#         time.sleep(3)
++#         del connected_users[sid]
++#     tts_pool.print_info()
++#     pipeline_pool.print_info()
++#     print(f'User {sid} disconnected')
+ def handle_disconnect():
+     sid = request.sid
+-    if sid in connected_users:
+-        connected_users[sid][0].cancel()
+-        connected_users[sid][1].interrupt()
+-        connected_users[sid][1].stop_pcm = True
+-        connected_users[sid][1].release()
+-        time.sleep(3)
+-        del connected_users[sid]
+-    tts_pool.print_info()
+-    pipeline_pool.print_info()
+-    print(f'User {sid} disconnected')
++    print(f"DEBUG: enter handle_disconnect (sid={sid}, {sid in connected_users})")
++    start_disconnect_cleanup(
++        sid,
++        reason="disconnect",
++        emit_timeout=False,
++    )
+ 
+ @socketio.on('recording-started')
+ def handle_recording_started():
+-- 
+2.34.1
+

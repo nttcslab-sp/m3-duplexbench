@@ -1,0 +1,567 @@
+diff --git a/moshi/moshi/server.py b/moshi/moshi/server.py
+index ac073e1..0cb1a59 100644
+--- a/moshi/moshi/server.py
++++ b/moshi/moshi/server.py
+@@ -18,0 +19,2 @@ from huggingface_hub import hf_hub_download
++from transformers import T5TokenizerFast, AutoTokenizer
++from sentencepiece import SentencePieceProcessor
+@@ -27,0 +30,2 @@ from .utils.audioproc import load_audio
++from .utils.textproc import load_alignments
++from .utils.interleaver import CustomInterleaver
+@@ -74,0 +79,7 @@ class ServerState:
++        if isinstance(text_tokenizer, T5TokenizerFast):
++            self.get_text = lambda text_token: self.text_tokenizer.convert_ids_to_tokens([text_token])[0]
++        elif isinstance(text_tokenizer, SentencePieceProcessor):
++            self.get_text = lambda text_token: self.text_tokenizer.id_to_piece(text_token)
++        else:
++            raise ValueError
++
+@@ -83 +93,0 @@ class ServerState:
+-        #TODO: implement system text conditioning
+@@ -86,29 +96,28 @@ class ServerState:
+-            raise NotImplementedError("conditioning_txt is unsupported")
+-        # if conditioning_txt:
+-        #     assert self.cond_audio is not None, 'Required --conditioning_wav'
+-        #     assert Path(conditioning_txt).exists(), f'No exist {conditioning_txt}'
+-        #
+-        #     # prepare interleaver
+-        #     interleaver = CustomInterleaver(
+-        #             text_tokenizer,
+-        #             mimi.frame_rate,
+-        #             lm.text_padding_token_id,
+-        #             lm.end_of_text_padding_id,
+-        #             lm.zero_token_id,
+-        #             keep_main_only=True,
+-        #             resegment_by_tokenizer=True,
+-        #             device='cpu',
+-        #             )
+-        #
+-        #     # get aligns
+-        #     aligns, chs = load_alignments(conditioning_txt)
+-        #     assert len(chs) == 1 and chs[0] == '0', '--conditioning_txt must include only channel "0"'
+-        #
+-        #     # tokenize
+-        #     cond_audio_dur = self.cond_audio.shape[0] / self.mimi.sample_rate
+-        #     self.cond_text_token = interleaver.prepare_item(
+-        #             aligns,
+-        #             cond_audio_dur,
+-        #             main_speaker="0"
+-        #             )[0].squeeze()     # [L, ]-shaped torch.tensor
+-        #     #         ).squeeze()     # [L, ]-shaped torch.tensor
++            assert self.cond_audio is not None, 'Required --conditioning_wav'
++            assert Path(conditioning_txt).exists(), f'No exist {conditioning_txt}'
++        
++            # prepare interleaver
++            interleaver = CustomInterleaver(
++                    text_tokenizer,
++                    mimi.frame_rate,
++                    lm.text_padding_token_id,
++                    lm.end_of_text_padding_id,
++                    lm.zero_token_id,
++                    keep_main_only=True,
++                    resegment_by_tokenizer=True,
++                    device='cpu',
++                    )
++                    #resegment_by_tokenizer=False,
++        
++            # get aligns
++            aligns, chs = load_alignments(conditioning_txt)
++            assert len(chs) == 1 and chs[0] == '0', '--conditioning_txt must include only channel "0"'
++        
++            # tokenize
++            cond_audio_dur = self.cond_audio.shape[0] / self.mimi.sample_rate
++            self.cond_text_token = interleaver.prepare_item(
++                    aligns,
++                    cond_audio_dur,
++                    main_speaker="0"
++                    )[0].squeeze()     # [L, ]-shaped torch.tensor
++            #         ).squeeze()     # [L, ]-shaped torch.tensor
+@@ -161,4 +170,3 @@ class ServerState:
+-                raise NotImplementedError
+-            #TMP     # w/ text tokens
+-            #TMP     text_tok = self.cond_text_token[n:n+1].reshape(1, -1, 1).to(self.device)
+-            #TMP     codes = torch.cat((text_tok, codes_sys, codes_usr), dim=1)
++                # w/ text tokens
++                text_tok = self.cond_text_token[n:n+1].reshape(1, -1, 1).to(self.device)
++                codes = torch.cat((text_tok, codes_sys, codes_usr), dim=1)
+@@ -213 +221,2 @@ class ServerState:
+-            _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
++            _text = self.get_text(text_token)
++            # _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
+@@ -365 +374,8 @@ def main():
+-    text_tokenizer = checkpoint_info.get_text_tokenizer()
++
++    # override tokenizer using AutoTokenizer
++    # necessary to set resegment_by_tokenizer=True (for Japanese models)
++    if args.tokenizer:
++        repo = Path(args.tokenizer.replace('hf://', '')).parent
++        text_tokenizer = AutoTokenizer.from_pretrained(str(repo))
++    else:
++        text_tokenizer = checkpoint_info.get_text_tokenizer()
+diff --git a/moshi/moshi/utils/interleaver.py b/moshi/moshi/utils/interleaver.py
+new file mode 100644
+index 0000000..de8e92a
+--- /dev/null
++++ b/moshi/moshi/utils/interleaver.py
+@@ -0,0 +1,244 @@
++import math
++from collections import deque
++
++import sentencepiece
++import torch
++from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
++from .textproc import (
++        tokenize,
++        tokenize_and_resegment,
++        get_ignore_id
++        )
++
++
++Alignment = tuple[str, tuple[float, float], str]
++TokenizedAlignment = tuple[list[int], tuple[float, float], str]
++
++
++class CustomInterleaver:
++    """Interleaver with basic featuress
++    Args:
++        tokenizer: text tokenizer used by the model.
++        audio_frame_rate (float): frame rate of the audio tokenizer.
++        text_padding (int): special token used for text padding.
++        end_of_text_padding (int): special token used to indicate end of text padding.
++        zero_padding (int): special token id indicating that a 0 should be used instead
++            of an actual embedding.
++        in_word_padding (int | None): padding used within a word segment. Will default to `text_padding`.
++        keep_main_only (bool): if True, will only keep the alignments with the main speaker.
++        keep_and_shift (bool): if True, will not drop any alignment, except for those with negative duration.
++        use_bos_eos: (bool): if True, inserts BOS, EOS for change of turns.
++        audio_delay (float): delay between the text and audio.
++            A positive value means the text will be ahead of the audio.
++        proba (float): probability of keeping the text.
++        device: device location for the output tensors.
++    """
++
++    def __init__(
++        self,
++        tokenizer: sentencepiece.SentencePieceProcessor | PreTrainedTokenizer | PreTrainedTokenizerFast,
++        audio_frame_rate: float,
++        text_padding: int,
++        end_of_text_padding: int,
++        zero_padding: int,
++        in_word_padding: int | None = None,
++        keep_main_only: bool = False,
++        main_speaker_label: str = "SPEAKER_MAIN",
++        use_bos_eos: bool = False,
++        keep_and_shift: bool = False,
++        use_alignment_end_time: bool = False,
++        audio_delay: float = 0.0,
++        proba: float = 1.0,
++        resegment_by_tokenizer: bool = False,
++        resegment_by_tokenizer_delimiter: str = "",
++        device: str | torch.device = "cuda",
++    ):
++        self.tokenizer = tokenizer
++        if isinstance(tokenizer, sentencepiece.SentencePieceProcessor):
++            self.tokenizer_bos_id = self.tokenizer.bos_id()
++            self.tokenizer_eos_id = self.tokenizer.eos_id()
++            self.tokenizer_ignore_id = []
++        elif isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast):
++            self.tokenizer_bos_id = self.tokenizer.bos_token_id
++            self.tokenizer_eos_id = self.tokenizer.eos_token_id
++            self.tokenizer_ignore_id = get_ignore_id(self.tokenizer)
++        else:
++            raise NotImplementedError
++        self.audio_frame_rate = audio_frame_rate
++        self.text_padding = text_padding
++        self.end_of_text_padding = end_of_text_padding
++        self.zero_padding = zero_padding
++        self.in_word_padding = (
++            self.text_padding if in_word_padding is None else in_word_padding
++        )
++        self.keep_main_only = keep_main_only
++        self.main_speaker_label = main_speaker_label
++        self.use_bos_eos = use_bos_eos
++        self.keep_and_shift = keep_and_shift
++        self.use_alignment_end_time = use_alignment_end_time
++        self.audio_delay = audio_delay
++        self.proba = proba
++        self.device = device
++        self.resegment_by_tokenizer = resegment_by_tokenizer
++        self.resegment_by_tokenizer_delimiter = resegment_by_tokenizer_delimiter
++
++    @property
++    def special_tokens(self) -> set[int]:
++        """Return the set of special tokens used by this interleaver."""
++        return {
++            self.text_padding,
++            self.end_of_text_padding,
++            self.tokenizer_bos_id,
++            self.tokenizer_eos_id,
++            self.zero_padding,
++            self.in_word_padding,
++        }
++
++    def _tokenize(self, alignments: list[Alignment]) -> list[TokenizedAlignment]:
++        if self.resegment_by_tokenizer:
++            # J-Moshi behavior: resegment by tokenizer-based words
++            out = tokenize_and_resegment(
++                    self.tokenizer,
++                    alignments,
++                    delimiter=self.resegment_by_tokenizer_delimiter,
++                    ignore_ids=self.tokenizer_ignore_id
++                    )
++        else:
++            # default Moshi behavior
++            out = []
++            for word, ts, speaker in alignments:
++                toks = tokenize(
++                        self.tokenizer, word.strip(), bos=False,
++                        ignore_id=self.tokenizer_ignore_id
++                        )
++                out.append((toks, ts, speaker))
++        return out
++
++    def _keep_main_only(
++        self, alignments: list[TokenizedAlignment], main_speaker: str
++    ) -> list[TokenizedAlignment]:
++        return [a for a in alignments if a[2] == main_speaker]
++
++    def _keep_those_with_duration(
++        self, alignments: list[TokenizedAlignment]
++    ) -> list[TokenizedAlignment]:
++        # Removes all words with negative or 0 durations.
++        return [a for a in alignments if a[1][0] < a[1][1]]
++
++    def _add_delay(
++        self, alignments: list[TokenizedAlignment]
++    ) -> list[TokenizedAlignment]:
++        # Delay the audio with respect to the text, e.g. positive values mean the audio is late on the text.
++        return [
++            (a[0], (a[1][0] - self.audio_delay, a[1][1] - self.audio_delay), a[2])
++            for a in alignments
++            if a[1][1] > self.audio_delay
++        ]
++
++    def _insert_bos_eos(
++        self, alignments: list[TokenizedAlignment], main_speaker: str
++    ) -> list[TokenizedAlignment]:
++        # EOS and BOS is different from what it was in the old Interleaver, it is now symmetrical:
++        # if the main speaker talks after another speaker (or is the first to talk), BOS is prepended to the first word.
++        # Similary, if any other speaker speaks either first, or after the main speaker, a EOS is prepended.
++        # This is in contrast with the legacy Interleaver, where the EOS would be inserted immediately
++        # at the end of the turn of the main speaker.
++        out: list[TokenizedAlignment] = []
++        last_speaker = None
++        for toks, ts, speaker in alignments:
++            toks = list(toks)
++            if speaker == last_speaker:
++                pass
++            elif speaker == main_speaker:
++                toks.insert(0, self.tokenizer_bos_id)
++            elif last_speaker == main_speaker:
++                assert out
++                toks.insert(0, self.tokenizer_eos_id)
++            last_speaker = speaker
++            out.append((toks, ts, speaker))
++        return out
++
++    def build_token_stream(
++        self,
++        alignments: list[TokenizedAlignment] | None,
++        segment_duration: float,
++    ) -> torch.Tensor:
++        """Builds the token stream from the tokenized alignments."""
++        T = math.ceil(segment_duration * self.audio_frame_rate)
++        if alignments is None:
++            text_tokens = [self.zero_padding] * T
++            vuv_flags = [0] * T
++        else:
++            text_tokens = [self.text_padding] * T
++            vuv_flags = [0] * T
++
++            i = 0
++            to_append_stack: deque = deque()
++            last_word_end = -1
++            for t in range(T):
++                # instead of "t + 1", better to use "t" ??
++                while (
++                    i < len(alignments) and alignments[i][1][0] * self.audio_frame_rate < t + 1
++                ):
++                    tokenized = alignments[i][0]
++                    last_word_end = int(alignments[i][1][1] * self.audio_frame_rate)
++                    if self.keep_and_shift:
++                        to_append_stack.extend(tokenized)
++                    else:
++                        to_append_stack = deque(tokenized)
++                    i += 1
++                if self.use_alignment_end_time:
++                    if to_append_stack:
++                        next_token = to_append_stack.popleft()
++                        text_tokens[t] = next_token
++                        vuv_flags[t] = 1
++                    elif t < last_word_end - 1:
++                        text_tokens[t] = self.in_word_padding
++                        vuv_flags[t] = 1
++                    elif t == last_word_end - 1:
++                        text_tokens[t] = self.end_of_text_padding
++                        vuv_flags[t] = 1
++                else:
++                    # same as original Moshi
++                    if to_append_stack:
++                        if t > 0 and text_tokens[t - 1] in [
++                            self.text_padding,
++                            self.in_word_padding,
++                        ]:
++                            text_tokens[t - 1] = self.end_of_text_padding
++                        next_token = to_append_stack.popleft()
++                        text_tokens[t] = next_token
++                        vuv_flags[t] = 1
++                    elif t <= last_word_end:
++                        text_tokens[t] = self.in_word_padding
++                        vuv_flags[t] = 1
++        if self.audio_delay < 0:
++            prefix_length = int(self.audio_frame_rate * -self.audio_delay)
++            text_tokens[:prefix_length] = [self.zero_padding] * prefix_length
++            vuv_flags[:prefix_length] = [0] * prefix_length
++        return (
++                torch.tensor(text_tokens, device=self.device).view(1, 1, -1),
++                torch.tensor(vuv_flags, device=self.device).view(1, 1, -1)
++                )
++
++    def prepare_item(
++        self,
++        alignments: list[Alignment] | None,
++        segment_duration: float,
++        main_speaker: str | None = None,
++    ) -> torch.Tensor:
++        """Responsible with processing the alignments and calling `build_token_stream`."""
++        if alignments is None:
++            tokenized = None
++        else:
++            tokenized = self._tokenize(sorted(alignments, key=lambda x: x[1][0]))
++            if self.keep_main_only:
++                main_speaker = main_speaker or self.main_speaker_label
++                tokenized = self._keep_main_only(tokenized, main_speaker)
++            elif self.use_bos_eos:
++                main_speaker = main_speaker or self.main_speaker_label
++                tokenized = self._insert_bos_eos(tokenized, main_speaker)
++            tokenized = self._keep_those_with_duration(tokenized)
++            if self.audio_delay != 0:
++                tokenized = self._add_delay(tokenized)
++        return self.build_token_stream(tokenized, segment_duration)
+diff --git a/moshi/moshi/utils/textproc.py b/moshi/moshi/utils/textproc.py
+new file mode 100644
+index 0000000..2495c59
+--- /dev/null
++++ b/moshi/moshi/utils/textproc.py
+@@ -0,0 +1,211 @@
++from functools import reduce
++from collections import deque
++from sentencepiece import SentencePieceProcessor
++from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
++
++
++def tokenize(
++    tokenizer: SentencePieceProcessor | PreTrainedTokenizer | PreTrainedTokenizerFast,
++    text: str,
++    bos: bool = True,
++    alpha: float | None = None,
++    ignore_id: list | None = None,
++    ):
++    """Tokenize the given string, accounting for new lines, potentially adding a BOS token."""
++    if isinstance(tokenizer, SentencePieceProcessor):
++        # nl_piece = tokenizer.encode("\n")[-1]
++        _nl_piece = tokenizer.encode("\n")
++        nl_piece = _nl_piece[-1] if _nl_piece else None
++        if alpha is not None:
++            tokens = tokenizer.encode(
++                text.split("\n"), enable_sampling=True, alpha=alpha, nbest_size=-1
++            )
++        else:
++            tokens = tokenizer.encode(text.split("\n"))
++        tokens = reduce(lambda a, b: [*a, nl_piece, *b], tokens)
++        if bos:
++            tokens = [tokenizer.bos_id(), *tokens]
++    else:
++        assert "\n" not in text
++        assert not alpha
++        tokens = tokenizer.encode(text, add_special_tokens=False)
++        if ignore_id:
++            tokens = [tok for tok in tokens if tok not in ignore_id]
++        if bos:
++            tokens = [tokenizer.bos_token_id, *tokens]
++    return tokens
++
++
++def get_ignore_id(tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast) -> list:
++    IGNORE_WORDS = ["▁"]
++    vocab = tokenizer.vocab
++    return [v for k, v in vocab.items() if k in IGNORE_WORDS]
++
++
++def load_alignments(txtf, start_sec=0., duration=float('inf'), load_as_single_speaker=False):
++    words = []
++    chs = set()
++    for line in open(txtf):
++        vals = line.strip().split(None, 3)
++        if len(vals) == 4:
++            ch, st, en, w = vals
++            rel_st = float(st) - start_sec
++            rel_en = float(en) - start_sec
++            if 0 <= rel_en and rel_st <= duration:
++                _ch = '0' if load_as_single_speaker else ch
++                words.append(
++                        (w, (max((0, rel_st)), min((rel_en, duration))), _ch)
++                        )
++                chs.add(_ch)
++    return words, tuple(chs)
++
++
++def detokenize(
++        tokenizer: SentencePieceProcessor | PreTrainedTokenizer | PreTrainedTokenizerFast,
++        tokens: list,
++        sentence: str | None = None,
++        ):
++    if isinstance(tokenizer, SentencePieceProcessor):
++        raise NotImplementedError
++    else:
++        unk_id = tokenizer.unk_token_id
++        assert unk_id is not None, 'tokenizer has no unk_token_id'
++        if unk_id not in tokens:
++            # return [tokenizer.decode(tok) for tok in tokens]
++            return tokenizer.convert_ids_to_tokens(tokens)
++        else:
++            assert sentence is not None, 'argument "sentence" is required'
++
++            # words = tokenizer.convert_ids_to_tokens(tokens, skip_special_tokens=False)
++            words = []
++            pos = 0             # sentence pos index
++            i = 0               # tokens/words pos index
++            n = len(tokens)      # tokens/words max length
++            while i < n:
++                if tokens[i] != unk_id:
++                    # non-unk tokens
++                    frag = tokenizer.decode([tokens[i]], skip_special_tokens=False).replace(" ", "")
++                    if not sentence.startswith(frag, pos):
++                        raise ValueError(
++                                f"token '{frag}' not matched sentence[{pos}:]\n"
++                                f"sentence: {sentence}"
++                                )
++                    words.append(frag)
++                    pos += len(frag)
++                    i += 1
++                    continue
++
++                # seek next known tokens while merging consequtive <unk> tokens into one
++                j = i
++                while j < n and tokens[j] == unk_id:
++                    j += 1
++
++                if j == n:
++                    # all the remained tokens are <unk>
++                    unk_text = sentence[pos:]
++                    pos = len(sentence)
++                    i = j
++                else:
++                    next_str = tokenizer.decode([tokens[j]], skip_special_tokens=False).replace(" ", "")
++                    k = sentence.find(next_str, pos)
++                    if k == -1:
++                        raise ValueError(f"Can't find '{next_str}' in sentence[{pos}:]")
++                    unk_text = sentence[pos:k]
++                    pos = k             # go to next known char position
++                    i = j               # go to next non-pad position
++                words.append(unk_text)
++        return words
++
++
++def resegment_alignments(aligns, chs, tokenizer, delimiter='', ignore_ids=[]):
++    aligns_reseg = []
++    for ch in chs:
++        _aligns = [a for a in aligns if a[2] == ch]
++        _aligns = sorted(_aligns, key=lambda x: x[1][0])     # sort by start time
++
++        # words -> sentence -> tokens -> (resegmented) words by tokenizer
++        snt = delimiter.join([a[0] for a in _aligns])
++        tokens = tokenize(tokenizer, snt, bos=False, ignore_id=ignore_ids)
++        _words_reseg = detokenize(tokenizer, tokens, snt)
++        assert len(tokens) == len(_words_reseg), 'tokenized sequence length mismatched'
++        # check sentence is correctly reconstructed
++        snt_reseg = ''.join(_words_reseg).replace('▁', '')
++        assert snt == snt_reseg, \
++                f"tokenizer enc->dec sentence mismatched from original one:\n" \
++                f"original : {snt}\ntokenized: {snt_reseg}"
++
++        # assign timestamp/channel from original alignments using char-based pseudo-timestamps
++        _aligns_char = deque()                   # use deque() for left-to-right matching
++        for (word, timestamp, ch) in _aligns:
++            n_char = len(word)
++            start, end = timestamp
++            char_dur = (end - start) / n_char
++            for i, char in enumerate(word):
++                _aligns_char.append(
++                        (char, (start + char_dur*i, start + char_dur * (i+1)), ch)
++                        )
++
++        # matching: resegmented words <-> char-aligns
++        _aligns_reseg = []
++        for word in _words_reseg:
++            start, end = None, None
++            for char in word:
++                if _aligns_char[0][0] == char:
++                    a = _aligns_char.popleft()
++                    if start is None:
++                        start = a[1][0]
++                    end = a[1][1]
++            # assert start is not None and end is not None, "alignment mismatched"
++            if not (start is not None and end is not None):
++                raise ValueError('alignment mismatched')
++            _aligns_reseg.append((word, (start, end), ch))
++        aligns_reseg.extend(_aligns_reseg)
++    return aligns_reseg
++
++
++def tokenize_and_resegment(tokenizer, aligns, delimiter='', ignore_ids=[]):
++    ch_aligns = {}
++    for a in aligns:
++        ch = a[2]
++        ch_aligns.setdefault(ch, []).append(a)
++
++    aligns_reseg = []
++    for ch, _aligns in ch_aligns.items():
++        _aligns = sorted(_aligns, key=lambda x: x[1][0])     # sort by start time
++
++        # words -> sentence -> tokens -> (resegmented) words by tokenizer
++        snt = delimiter.join([a[0] for a in _aligns])
++        tokens = tokenize(tokenizer, snt, bos=False, ignore_id=ignore_ids)
++        _words_reseg = detokenize(tokenizer, tokens, snt)
++        snt_reseg = ''.join(_words_reseg).replace('▁', '')
++        assert snt == snt_reseg, \
++                f"tokenizer enc->dec sentence mismatched from original one:\n" \
++                f"original : {snt}\ntokenized: {snt_reseg}"
++
++        # assign timestamp/channel from original alignments using char-based pseudo-timestamps
++        _aligns_char = deque()                   # use deque() for left-to-right matching
++        for (word, timestamp, ch) in _aligns:
++            n_char = len(word)
++            start, end = timestamp
++            char_dur = (end - start) / n_char
++            for i, char in enumerate(word):
++                _aligns_char.append(
++                        (char, (start + char_dur*i, start + char_dur * (i+1)), ch)
++                        )
++
++        # matching: resegmented words <-> char-aligns
++        _aligns_reseg = []
++        for word, tok in zip(_words_reseg, tokens):
++            start, end = None, None
++            for char in word:
++                if _aligns_char[0][0] == char:
++                    a = _aligns_char.popleft()
++                    if start is None:
++                        start = a[1][0]
++                    end = a[1][1]
++            # assert start is not None and end is not None, "alignment mismatched"
++            if not (start is not None and end is not None):
++                raise ValueError('alignment mismatched')
++            _aligns_reseg.append(([tok], (start, end), ch))
++        aligns_reseg.extend(_aligns_reseg)
++    return aligns_reseg

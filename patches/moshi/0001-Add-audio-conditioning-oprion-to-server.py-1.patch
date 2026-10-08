@@ -1,0 +1,395 @@
+diff --git a/moshi/moshi/models/lm.py b/moshi/moshi/models/lm.py
+index 209b7a5..4044b9e 100644
+--- a/moshi/moshi/models/lm.py
++++ b/moshi/moshi/models/lm.py
+@@ -529,0 +530 @@ class _LMGenState(State):
++    out_cache: torch.Tensor | None = None
+@@ -573,0 +575,2 @@ class LMGen(StreamingModule[_LMGenState]):
++        use_stereo_input: bool = False,
++        dialog_prompt_size: int = 0,
+@@ -603,0 +607,2 @@ class LMGen(StreamingModule[_LMGenState]):
++        self.use_stereo_input = use_stereo_input
++        self.dialog_prompt_size = dialog_prompt_size
+@@ -614,0 +620,6 @@ class LMGen(StreamingModule[_LMGenState]):
++        out_cache = torch.full(
++            (batch_size, self.lm_model.dep_q + 1, self.max_delay + 2),
++            lm_model.ungenerated_token_id,
++            device=lm_model.device,
++            dtype=torch.long,
++        )
+@@ -643 +654 @@ class LMGen(StreamingModule[_LMGenState]):
+-            offsets, condition_sum=condition_sum, condition_cross=condition_cross,
++            offsets, out_cache=out_cache, condition_sum=condition_sum, condition_cross=condition_cross,
+@@ -677,0 +689 @@ class LMGen(StreamingModule[_LMGenState]):
++        use_stereo_input = self.use_stereo_input and (state.offset_cpu < self.dialog_prompt_size)
+@@ -683 +695,2 @@ class LMGen(StreamingModule[_LMGenState]):
+-        needed_tokens = lm_model.num_codebooks - lm_model.dep_q - 1
++        # needed_tokens = lm_model.num_codebooks - lm_model.dep_q - 1
++        needed_tokens = lm_model.num_codebooks - lm_model.dep_q - 1 if use_stereo_input is False else lm_model.num_codebooks
+@@ -689 +702,4 @@ class LMGen(StreamingModule[_LMGenState]):
+-            input_tokens = input_tokens[:, :needed_tokens, :]
++            if use_stereo_input:
++                input_tokens = input_tokens[:, :needed_tokens, :]
++            else:
++                input_tokens = input_tokens[:, lm_model.dep_q + 1:, :]
+@@ -693,4 +709,26 @@ class LMGen(StreamingModule[_LMGenState]):
+-        delays = self.delays_cuda[lm_model.dep_q + 1:]
+-        write_positions = (state.offsets[:, None, None] + delays[:, None]) % CT
+-        scatter_with_mask_(state.cache[:, lm_model.dep_q + 1:], -1, write_positions, input_tokens,
+-                           state.exec_mask[:, None, None])
++        # delays = self.delays_cuda[lm_model.dep_q + 1:]
++        # write_positions = (state.offsets[:, None, None] + delays[:, None]) % CT
++        # scatter_with_mask_(state.cache[:, lm_model.dep_q + 1:], -1, write_positions, input_tokens,
++        #                    state.exec_mask[:, None, None])
++        if use_stereo_input:
++            delays = self.delays_cuda
++            write_positions = (state.offsets[:, None, None] + delays[:, None]) % CT
++        
++            scatter_with_mask_(
++                state.cache,
++                -1,
++                write_positions,
++                input_tokens,
++                state.exec_mask[:, None, None],
++            )
++        else:
++            delays = self.delays_cuda[lm_model.dep_q + 1:]
++            write_positions = (state.offsets[:, None, None] + delays[:, None]) % CT
++        
++            scatter_with_mask_(
++                state.cache[:, lm_model.dep_q + 1:],
++                -1,
++                write_positions,
++                input_tokens,
++                state.exec_mask[:, None, None],
++            )
+@@ -762 +800,4 @@ class LMGen(StreamingModule[_LMGenState]):
+-        scatter_with_mask_(state.cache[:, :1], -1, positions,
++        # for 2-channel audio input, use the output cache to avoid overwriting the input cache
++        output_cache = state.out_cache if use_stereo_input else state.cache
++        assert output_cache is not None
++        scatter_with_mask_(output_cache[:, :1], -1, positions,
+@@ -780 +821,6 @@ class LMGen(StreamingModule[_LMGenState]):
+-        out = state.cache.gather(dim=2, index=index)
++        if use_stereo_input:
++            # retrieve model outputs from the output cache
++            assert state.out_cache is not None
++            out = state.out_cache.gather(dim=2, index=index)
++        else:
++            out = state.cache.gather(dim=2, index=index)
+diff --git a/moshi/moshi/server.py b/moshi/moshi/server.py
+index 189d272..ac073e1 100644
+--- a/moshi/moshi/server.py
++++ b/moshi/moshi/server.py
+@@ -22,0 +23 @@ import torch
++import torch.nn.functional as F
+@@ -25,0 +27 @@ from .run_inference import get_condition_tensors
++from .utils.audioproc import load_audio
+@@ -47,2 +49,13 @@ class ServerState:
+-    def __init__(self, model_type: str, mimi: MimiModel, text_tokenizer: sentencepiece.SentencePieceProcessor,
+-                 lm: LMModel, cfg_coef: float, device: str | torch.device, **kwargs):
++    def __init__(
++        self,
++        model_type: str,
++        mimi: MimiModel,
++        text_tokenizer: sentencepiece.SentencePieceProcessor,
++        lm: LMModel,
++        cfg_coef: float,
++        device: str | torch.device,
++        conditioning_wav: str | None = None,
++        conditioning_user_wav: str | None = None,
++        conditioning_txt: str | None = None,
++        **kwargs):
++
+@@ -61,0 +75,112 @@ class ServerState:
++        self.cond_audio = None
++        if conditioning_wav:
++            assert Path(conditioning_wav).exists(), f'No exist {conditioning_wav}'
++            self.cond_audio = load_audio(
++                    conditioning_wav,
++                    sample_rate=self.mimi.sample_rate
++                    )
++
++        #TODO: implement system text conditioning
++        self.cond_text_token = None
++        if conditioning_txt:
++            raise NotImplementedError("conditioning_txt is unsupported")
++        # if conditioning_txt:
++        #     assert self.cond_audio is not None, 'Required --conditioning_wav'
++        #     assert Path(conditioning_txt).exists(), f'No exist {conditioning_txt}'
++        #
++        #     # prepare interleaver
++        #     interleaver = CustomInterleaver(
++        #             text_tokenizer,
++        #             mimi.frame_rate,
++        #             lm.text_padding_token_id,
++        #             lm.end_of_text_padding_id,
++        #             lm.zero_token_id,
++        #             keep_main_only=True,
++        #             resegment_by_tokenizer=True,
++        #             device='cpu',
++        #             )
++        #
++        #     # get aligns
++        #     aligns, chs = load_alignments(conditioning_txt)
++        #     assert len(chs) == 1 and chs[0] == '0', '--conditioning_txt must include only channel "0"'
++        #
++        #     # tokenize
++        #     cond_audio_dur = self.cond_audio.shape[0] / self.mimi.sample_rate
++        #     self.cond_text_token = interleaver.prepare_item(
++        #             aligns,
++        #             cond_audio_dur,
++        #             main_speaker="0"
++        #             )[0].squeeze()     # [L, ]-shaped torch.tensor
++        #     #         ).squeeze()     # [L, ]-shaped torch.tensor
++
++        self.cond_user_audio = None
++        if conditioning_user_wav:
++            assert Path(conditioning_user_wav).exists(), f'No exist {conditioning_user_wav}'
++            self.cond_user_audio = load_audio(
++                conditioning_user_wav,
++                sample_rate=self.mimi.sample_rate
++            )
++ 
++    def apply_stereo_conditioning(self):
++        assert self.cond_audio is not None or self.cond_user_audio is not None
++        log("info", "start stereo conditioning")
++
++        self.lm_gen.use_stereo_input = True
++        self.lm_gen.dialog_prompt_size = 100000
++
++        tokens = None
++        zero_chunk = torch.zeros(1, 1, self.frame_size, dtype=torch.float32, device=self.device)
++
++        system_len = 0 if self.cond_audio is None else len(self.cond_audio)
++        user_len = 0 if self.cond_user_audio is None else len(self.cond_user_audio)
++        total_len = max(system_len, user_len)
++
++        for n, i in enumerate(range(0, total_len, self.frame_size)):
++            # system chunk
++            if self.cond_audio is None:
++                chunk_sys = zero_chunk
++            else:
++                sys_part = self.cond_audio[i: i + self.frame_size]
++                if sys_part.size(0) < self.frame_size:
++                    sys_part = F.pad(sys_part, (0, self.frame_size - sys_part.size(0)))
++                chunk_sys = sys_part.view(1, 1, self.frame_size).to(self.device)
++            codes_sys = self.mimi.encode(chunk_sys)
++
++            # user chunk
++            if self.cond_user_audio is None:
++                chunk_usr = zero_chunk
++            else:
++                usr_part = self.cond_user_audio[i: i + self.frame_size]
++                if usr_part.size(0) < self.frame_size:
++                    usr_part = F.pad(usr_part, (0, self.frame_size - usr_part.size(0)))
++                chunk_usr = usr_part.view(1, 1, self.frame_size).to(self.device)
++            codes_usr = self.mimi.encode(chunk_usr)
++
++            # create concatenated input codes
++            if self.cond_text_token is not None and n < len(self.cond_text_token):
++                raise NotImplementedError
++            #TMP     # w/ text tokens
++            #TMP     text_tok = self.cond_text_token[n:n+1].reshape(1, -1, 1).to(self.device)
++            #TMP     codes = torch.cat((text_tok, codes_sys, codes_usr), dim=1)
++            else:
++                # w/o text tokens
++                if tokens is None:
++                    assert self.lm_gen._streaming_state is not None
++                    text_in = self.lm_gen._streaming_state.initial[:, :1, :]
++                else:
++                    # use text token generated in the previous frame
++                    text_in = tokens[:, :1, :]
++                codes = torch.cat((text_in, codes_sys, codes_usr), dim=1)
++
++            # decode step-by-step
++            for c in range(codes.shape[-1]):
++                tokens = self.lm_gen.step(codes[:, :, c: c + 1])
++                if tokens is None:
++                    continue
++
++        self.lm_gen.use_stereo_input = False
++        self.lm_gen.dialog_prompt_size = 0
++        torch.cuda.synchronize()
++        log("info", "stereo conditioning finished")
++
++
+@@ -164,0 +290,4 @@ class ServerState:
++
++            if self.cond_audio is not None or self.cond_user_audio is not None:
++                await asyncio.to_thread(self.apply_stereo_conditioning)
++
+@@ -194,0 +324,6 @@ def main():
++    parser.add_argument("--conditioning-wav", type=str,
++                        help="Audio used for conditioning in speech")
++    parser.add_argument("--conditioning-txt", type=str,
++                        help="Alignment text correspond to conditioning_wav")
++    parser.add_argument("--conditioning-user-wav", type=str,
++                        help="Audio used for conditioning on the user channel")
+@@ -236,0 +372,3 @@ def main():
++                        conditioning_wav=args.conditioning_wav,
++                        conditioning_txt=args.conditioning_txt,
++                        conditioning_user_wav=args.conditioning_user_wav,
+diff --git a/moshi/moshi/utils/audioproc.py b/moshi/moshi/utils/audioproc.py
+new file mode 100755
+index 0000000..aa63ac5
+--- /dev/null
++++ b/moshi/moshi/utils/audioproc.py
+@@ -0,0 +1,157 @@
++import numpy as np
++import soundfile as sf
++import librosa
++import torch
++import typing as tp
++
++
++def load_scp(scpf):
++    return dict([line.strip().split() for line in scpf.open()])
++
++
++def get_wav_info(wavf):
++    info = sf.info(wavf)
++    return info.samplerate, info.duration
++
++
++def get_audio_and_text_dict(
++        wavscp,
++        textlist,
++        segment_length=200.,
++        segment_shift=200.,
++        segment_length_min=0.,
++        ):
++    audio_dict_full = load_scp(wavscp)
++    text_dict_full = load_scp(textlist)
++    assert set(audio_dict_full.keys()) == set(text_dict_full.keys())
++
++    audio_dict = {}
++    text_dict = {}
++    for fid, wavf in audio_dict_full.items():
++        sf, dur = get_wav_info(wavf)
++        chunks = [(s, min((s+segment_length, dur))) for s in np.arange(0, dur, segment_shift)]
++        assert len(chunks) < 10**6, f"too many segments in {wavf}"
++        for i, (st, en) in enumerate(chunks):
++            if (en - st) >= segment_length_min:
++                fid_seg = f"{fid}_{i:06d}"
++                audio_dict[fid_seg] = (wavf, sf, st, en)
++                text_dict[fid_seg] = text_dict_full[fid]
++    return audio_dict, text_dict
++
++
++def get_read_frame(
++        wavf: str,
++        fs: int,
++        st: float,
++        en: float,
++        target_dur: float,
++        context_dur: tp.Optional[float] = None,
++        rs: tp.Optional[np.random.RandomState] = None,
++        ):
++    dur = en - st
++    if dur <= target_dur + 0.01 or rs is None:
++        offset_sec = 0
++        read_sec = dur
++    else:
++        assert isinstance(rs, np.random.RandomState)
++        offset_sec = rs.randint(0, int((dur - target_dur)*100))/100     # 0.01sec steps
++        read_sec = target_dur
++    start_sec = st + offset_sec
++
++    # for reading audio (context interval + target interval)
++    if context_dur:
++        start_sec_audio = max([0, start_sec - context_dur])
++        read_sec_audio = read_sec + (start_sec - start_sec_audio)
++    else:
++        start_sec_audio = start_sec
++        read_sec_audio = read_sec
++    return start_sec, read_sec, start_sec_audio, read_sec_audio
++
++
++"""
++    start_frame = int(start_sec * fs)
++    read_frame = int(read_sec * fs)
++    if context_dur:
++        start_sec_context = max([0, start_sec - context_dur])
++        read_sec_context = start_sec_context - start_sec
++    else:
++        start_sec_context, read_sec_context = 0, 0
++    start_frame_context = int(start_sec_context * fs)
++    read_frame_context = int(read_sec_context * fs)
++    return start_sec, read_sec, start_frame, read_frame, start_frame_context, read_frame_context
++"""
++
++
++def load_audio(audio_path: str, sample_rate: int = 24000, norm_audio: bool = False):
++    x, fs = sf.read(audio_path)
++
++    # reshape to 2d array: (T, ) or (T, C) -> (C, T)
++    if len(x.shape) == 1:
++        x = x[np.newaxis, :]
++    else:
++        x = x.T
++
++    if fs != sample_rate:
++        x = librosa.resample(x, orig_sr=fs, target_sr=sample_rate)
++
++    if norm_audio:
++        x = normalize_audio(x)
++
++    x = x.squeeze()
++    x = torch.from_numpy(x).to(torch.float32)
++    return x
++
++
++def normalize_audio(x, dst_amp=0.8):
++    """
++    set max signal amplitude = dst_amp on each channel
++    """
++    if len(x.shape) == 1:
++        x = x[np.newaxis, :]
++
++    x_norm = np.zeros(x.shape)
++    for i in range(x.shape[0]):
++        maxamp = float(np.abs(x[i]).max())
++        if maxamp == 0:
++            maxamp = 1
++        x_norm[i] = (x[i] / maxamp) * dst_amp
++    return np.squeeze(x_norm)
++
++
++def div_channel(x, aligns, main_speaker, sample_rate):
++    """
++    create 1ch -> 2ch audio by picking target channel's words in aligns
++    1ch: main_ch (selected main_ch's intervals)
++    2ch: rest
++    """
++    main_ch = int(main_speaker)
++    x = x.squeeze()     # [T, ]-shaped array
++    T = x.shape[0]
++
++    # init: 0ch = zero-array, 1ch = original wave
++    y = np.stack((np.zeros(T), x)).astype(np.float32)
++    for (_, t, ch) in aligns:
++        if int(ch) == main_ch:
++            st = int(t[0] * sample_rate)
++            en = int(t[1] * sample_rate)
++            y[0, st:en] = x[st:en]          # copy original signal
++            y[1, st:en] = 0.                # overwrite original signal to zero
++    return y
++
++
++def arrange_channel(x, main_ch):
++    """
++    sort + sum channels (Nch -> 2ch) where N >= 2
++    1ch: main_ch
++    2ch: rest channels (summed)
++    """
++    mask = np.ones(x.shape, dtype=bool)
++    mask[main_ch] = 0
++    return np.stack((x[main_ch], (x*mask).sum(axis=0)))
++
++
++def merge_channel(x):
++    """
++    merge channels (Nch -> 1ch)
++    """
++    return x.sum(axis=0)[np.newaxis, :]

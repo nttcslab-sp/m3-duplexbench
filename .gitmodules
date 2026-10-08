@@ -1,0 +1,15 @@
+[submodule "tools/moshi"]
+	path = tools/moshi
+	url = https://github.com/kyutai-labs/moshi.git
+[submodule "tools/Freeze-Omni"]
+	path = tools/Freeze-Omni
+	url = https://github.com/VITA-MLLM/Freeze-Omni.git
+[submodule "tools/personaplex"]
+	path = tools/personaplex
+	url = https://github.com/NVIDIA/personaplex.git
+[submodule "tools/BayLing-Duplex"]
+	path = tools/BayLing-Duplex
+	url = https://github.com/BayLing-Models/BayLing-Duplex.git
+[submodule "tools/DuplexCascade"]
+	path = tools/DuplexCascade
+	url = https://github.com/sbintuitions/DuplexCascade.git

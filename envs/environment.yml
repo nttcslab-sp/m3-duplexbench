@@ -1,0 +1,23 @@
+name: m3-duplexbench
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - montreal-forced-aligner
+  - spacy
+  - sudachipy
+  - sudachidict-core
+  - pip
+  - pip:
+      - "argparser @ git+https://github.com/de9uch1/argparser.git"
+      - "-e ../tools/moshi/moshi"
+      - faster-whisper==1.2.1
+      - openai==2.40.0
+      - torch==2.6.0
+      - torchaudio==2.6.0
+      - transformers==4.45.2
+      - python-socketio
+      - websocket-client
+      - sphn

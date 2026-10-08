@@ -1,0 +1,90 @@
+diff --git a/moshi/moshi/models/lm.py b/moshi/moshi/models/lm.py
+index 4044b9e..d275730 100644
+--- a/moshi/moshi/models/lm.py
++++ b/moshi/moshi/models/lm.py
+@@ -561,0 +562 @@ class LMGen(StreamingModule[_LMGenState]):
++        use_sampling_text: bool | None = None,
+@@ -583 +584,5 @@ class LMGen(StreamingModule[_LMGenState]):
+-        self.use_sampling = use_sampling
++
++        self.use_sampling = use_sampling  # sampling audio
++        self.use_sampling_text = use_sampling # sampling text
++        if use_sampling_text is not None:
++            self.use_sampling_text = use_sampling_text
+@@ -609,0 +615,14 @@ class LMGen(StreamingModule[_LMGenState]):
++    def get_generate_config(self):
++        return {
++                "text": {
++                    "use_sampling_text": self.use_sampling_text,
++                    "temp_text": self.temp_text,
++                    "tok_k_text": self.top_k_text,
++                    },
++                "audio": {
++                    "use_sampling": self.use_sampling,
++                    "temp": self.temp,
++                    "tok_k": self.top_k,
++                    }
++                }
++
+@@ -776 +795 @@ class LMGen(StreamingModule[_LMGenState]):
+-            self.use_sampling,
++            self.use_sampling_text,
+diff --git a/moshi/moshi/run_inference.py b/moshi/moshi/run_inference.py
+index 709e37d..99cb169 100644
+--- a/moshi/moshi/run_inference.py
++++ b/moshi/moshi/run_inference.py
+@@ -242,0 +243 @@ class InferenceState:
++            f"text sampling: {self.lm_gen.use_sampling_text}, "
+@@ -409,0 +411,6 @@ def main():
++    parser.add_argument("--use-sampling-text", action='store_true')
++    parser.add_argument("--temp-text", type=float, default=0.7)
++    parser.add_argument("--top-k-text", type=int, default=25)
++    parser.add_argument("--use-sampling-audio", action='store_true')
++    parser.add_argument("--temp-audio", type=float, default=0.8)
++    parser.add_argument("--top-k-audio", type=int, default=250)
+@@ -443,0 +451,12 @@ def main():
++    lm_gen_config = checkpoint_info.lm_gen_config
++    lm_gen_config.update(
++        {
++            'use_sampling_text': args.use_sampling_text,
++            'temp_text': args.temp_text,
++            'top_k_text': args.top_k_text,
++            'use_sampling': args.use_sampling_audio,
++            'temp': args.temp_audio,
++            'top_k': args.top_k_audio,
++        }
++    )
++
+@@ -456 +475 @@ def main():
+-        **checkpoint_info.lm_gen_config,
++        **lm_gen_config,
+diff --git a/moshi/moshi/server.py b/moshi/moshi/server.py
+index 7978598..4dc33f5 100644
+--- a/moshi/moshi/server.py
++++ b/moshi/moshi/server.py
+@@ -79,0 +80,2 @@ class ServerState:
++        log("info", f"LMGen config: {str(self.lm_gen.get_generate_config())}")
++
+@@ -347,0 +350,6 @@ def main():
++    parser.add_argument("--use-sampling-text", action='store_true')
++    parser.add_argument("--temp-text", type=float, default=0.7)
++    parser.add_argument("--top-k-text", type=int, default=25)
++    parser.add_argument("--use-sampling-audio", action='store_true')
++    parser.add_argument("--temp-audio", type=float, default=0.8)
++    parser.add_argument("--top-k-audio", type=int, default=250)
+@@ -390,0 +399,12 @@ def main():
++    lm_gen_config = checkpoint_info.lm_gen_config
++    lm_gen_config.update(
++        {
++            'use_sampling_text': args.use_sampling_text,
++            'temp_text': args.temp_text,
++            'top_k_text': args.top_k_text,
++            'use_sampling': args.use_sampling_audio,
++            'temp': args.temp_audio,
++            'top_k': args.top_k_audio,
++        }
++    )
++
+@@ -396 +416 @@ def main():
+-                        **checkpoint_info.lm_gen_config)
++                        **lm_gen_config)

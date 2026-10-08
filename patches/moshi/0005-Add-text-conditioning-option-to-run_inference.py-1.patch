@@ -1,0 +1,114 @@
+diff --git a/moshi/moshi/run_inference.py b/moshi/moshi/run_inference.py
+index c9f52d0..709e37d 100644
+--- a/moshi/moshi/run_inference.py
++++ b/moshi/moshi/run_inference.py
+@@ -21,0 +22,2 @@ from .utils.audioproc import load_audio
++from .utils.textproc import load_alignments
++from .utils.interleaver import CustomInterleaver
+@@ -23,0 +26 @@ import torch.nn.functional as F
++from transformers import T5TokenizerFast, AutoTokenizer
+@@ -79,0 +83 @@ class InferenceState:
++        resegment_text_by_tokenizer: bool = False,
+@@ -86,0 +91,7 @@ class InferenceState:
++        if isinstance(self.text_tokenizer, T5TokenizerFast):
++            self.text_eos_id = self.text_tokenizer.convert_tokens_to_ids(['</s>'])[0]
++            self.get_text = lambda text_token: self.text_tokenizer.convert_ids_to_tokens([text_token])[0]
++        else:
++            self.text_eos_id = self.text_tokenizer.eos_id()
++            self.get_text = lambda text_token: self.text_tokenizer.id_to_piece(text_token)
++
+@@ -110 +120,0 @@ class InferenceState:
+-        #TODO: implement system text conditioning
+@@ -113,29 +123,27 @@ class InferenceState:
+-            raise NotImplementedError("conditioning_txt is unsupported")
+-        # if conditioning_txt:
+-        #     assert self.cond_audio is not None, 'Required --conditioning_wav'
+-        #     assert Path(conditioning_txt).exists(), f'No exist {conditioning_txt}'
+-        #
+-        #     # prepare interleaver
+-        #     interleaver = CustomInterleaver(
+-        #             text_tokenizer,
+-        #             mimi.frame_rate,
+-        #             lm.text_padding_token_id,
+-        #             lm.end_of_text_padding_id,
+-        #             lm.zero_token_id,
+-        #             keep_main_only=True,
+-        #             resegment_by_tokenizer=True,
+-        #             device='cpu',
+-        #             )
+-        #
+-        #     # get aligns
+-        #     aligns, chs = load_alignments(conditioning_txt)
+-        #     assert len(chs) == 1 and chs[0] == '0', '--conditioning_txt must include only channel "0"'
+-        #
+-        #     # tokenize
+-        #     cond_audio_dur = self.cond_audio.shape[0] / self.mimi.sample_rate
+-        #     self.cond_text_token = interleaver.prepare_item(
+-        #             aligns,
+-        #             cond_audio_dur,
+-        #             main_speaker="0"
+-        #             )[0].squeeze()     # [L, ]-shaped torch.tensor
+-        #     #         ).squeeze()     # [L, ]-shaped torch.tensor
++            assert self.cond_audio is not None, 'Required --conditioning_wav'
++            assert Path(conditioning_txt).exists(), f'No exist {conditioning_txt}'
++
++            # prepare interleaver
++            interleaver = CustomInterleaver(
++                    text_tokenizer,
++                    mimi.frame_rate,
++                    lm.text_padding_token_id,
++                    lm.end_of_text_padding_id,
++                    lm.zero_token_id,
++                    keep_main_only=True,
++                    resegment_by_tokenizer=resegment_text_by_tokenizer,
++                    device='cpu',
++                    )
++
++            # get aligns
++            aligns, chs = load_alignments(conditioning_txt)
++            assert len(chs) == 1 and chs[0] == '0', '--conditioning_txt must include only channel "0"'
++
++            # tokenize
++            cond_audio_dur = self.cond_audio.shape[0] / self.mimi.sample_rate
++            self.cond_text_token = interleaver.prepare_item(
++                    aligns,
++                    cond_audio_dur,
++                    main_speaker="0"
++                    )[0].squeeze()     # [L, ]-shaped torch.tensor
++            #         ).squeeze()     # [L, ]-shaped torch.tensor
+@@ -190,4 +198,4 @@ class InferenceState:
+-                raise NotImplementedError
+-            #TMP     # w/ text tokens
+-            #TMP     text_tok = self.cond_text_token[n:n+1].reshape(1, -1, 1).to(self.device)
+-            #TMP     codes = torch.cat((text_tok, codes_sys, codes_usr), dim=1)
++                # w/ text tokens
++                text_tok = self.cond_text_token[n:n+1].reshape(1, -1, 1).to(self.device)
++                text_tok = text_tok.expand(self.batch_size, -1, -1).contiguous()
++                codes = torch.cat((text_tok, codes_sys, codes_usr), dim=1)
+@@ -307 +315 @@ class InferenceState:
+-                    elif one_text.item() == self.text_tokenizer.eos_id():
++                    elif one_text.item() == self.text_eos_id:
+@@ -318 +326,2 @@ class InferenceState:
+-                            text = self.text_tokenizer.id_to_piece(one_text.item())  # pyright: ignore
++                            # text = self.text_tokenizer.id_to_piece(one_text.item())  # pyright: ignore
++                            text = self.get_text(one_text.item())
+@@ -324 +333,2 @@ class InferenceState:
+-                    text = self.text_tokenizer.id_to_piece(one_text.item())  # pyright: ignore
++                    # text = self.text_tokenizer.id_to_piece(one_text.item())  # pyright: ignore
++                    text = self.get_text(one_text.item())
+@@ -411 +421,12 @@ def main():
+-    text_tokenizer = checkpoint_info.get_text_tokenizer()
++
++    # override tokenizer using AutoTokenizer
++    # necessary to set resegment_by_tokenizer=True (for Japanese models)
++    if args.tokenizer:
++        repo = Path(args.tokenizer.replace('hf://', '')).parent
++        text_tokenizer = AutoTokenizer.from_pretrained(str(repo))
++        resegment_text_by_tokenizer = True
++    # default (en)
++    else:
++        text_tokenizer = checkpoint_info.get_text_tokenizer()
++        resegment_text_by_tokenizer = False
++
+@@ -433,0 +455 @@ def main():
++        resegment_text_by_tokenizer=resegment_text_by_tokenizer,

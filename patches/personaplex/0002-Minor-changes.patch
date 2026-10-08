@@ -1,0 +1,56 @@
+From 5951a6fd06e8b1049bd715911156169260a0de88 Mon Sep 17 00:00:00 2001
+From: ryfukuda <ryo.fukuda@ntt.com>
+Date: Tue, 9 Jun 2026 17:12:47 +0900
+Subject: [PATCH 2/2] Minor changes
+
+---
+ moshi/moshi/models/lm.py | 9 +++++++++
+ moshi/moshi/offline.py   | 4 ++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/moshi/moshi/models/lm.py b/moshi/moshi/models/lm.py
+index 0882a12..0f882f7 100644
+--- a/moshi/moshi/models/lm.py
++++ b/moshi/moshi/models/lm.py
+@@ -966,7 +966,16 @@ class LMGen(StreamingModule[_LMGenState]):
+         raw_audio = load_audio(
+             voice_prompt, self._sample_rate,
+         )  # shape: (1, T) for mono
++        self.load_voice_prompt_audio(
++            raw_audio,
++            max_duration,
++        )
+ 
++    def load_voice_prompt_audio(
++        self,
++        raw_audio: np.ndarray,
++        max_duration: float | None = None,
++    ):
+         if max_duration is not None:
+             max_samples = int(round(max_duration * self._sample_rate))
+             raw_audio = raw_audio[..., :max_samples]
+diff --git a/moshi/moshi/offline.py b/moshi/moshi/offline.py
+index 241da99..43dbca6 100644
+--- a/moshi/moshi/offline.py
++++ b/moshi/moshi/offline.py
+@@ -185,7 +185,7 @@ def apply_stereo_conditioning(
+     frame_size: int,
+ ):
+     """Condition PersonaPlex on paired user/system audio."""
+-    log("info", "start stereo conditioning")
++    log("info", "Start stereo conditioning")
+ 
+     user_audio = None
+     system_audio = None
+@@ -280,7 +280,7 @@ def apply_stereo_conditioning(
+     if torch.cuda.is_available():
+         torch.cuda.synchronize()
+ 
+-    log("info", f"duplex audio conditioning finished: {steps} steps")
++    log("info", f"Audio conditioning finished: {steps} steps")
+ 
+ 
+ def run_inference(
+-- 
+2.34.1
+

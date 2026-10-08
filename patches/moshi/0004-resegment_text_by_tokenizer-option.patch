@@ -1,0 +1,16 @@
+diff --git a/moshi/moshi/server.py b/moshi/moshi/server.py
+index 0cb1a59..7978598 100644
+--- a/moshi/moshi/server.py
++++ b/moshi/moshi/server.py
+@@ -63,0 +64 @@ class ServerState:
++        resegment_text_by_tokenizer: bool = False,
+@@ -107 +108 @@ class ServerState:
+-                    resegment_by_tokenizer=True,
++                    resegment_by_tokenizer=resegment_text_by_tokenizer,
+@@ -379,0 +381,2 @@ def main():
++        resegment_text_by_tokenizer = True
++    # default (en)
+@@ -381,0 +385 @@ def main():
++        resegment_text_by_tokenizer = False
+@@ -390,0 +395 @@ def main():
++                        resegment_text_by_tokenizer=resegment_text_by_tokenizer,

@@ -1,0 +1,21 @@
+diff --git a/moshi/moshi/models/lm.py b/moshi/moshi/models/lm.py
+index d275730..1cd3f7d 100644
+--- a/moshi/moshi/models/lm.py
++++ b/moshi/moshi/models/lm.py
+@@ -731,0 +732 @@ class LMGen(StreamingModule[_LMGenState]):
++        # for 2-channel audio input, store every token in the cache
+@@ -821,0 +823,2 @@ class LMGen(StreamingModule[_LMGenState]):
++
++        # write text_tokens to output_cache (state.out_cache or state.cache)
+@@ -825,0 +829 @@ class LMGen(StreamingModule[_LMGenState]):
++            # write audio_tokens to output_cache (state.out_cache or state.cache)
+@@ -827 +831 @@ class LMGen(StreamingModule[_LMGenState]):
+-                state.cache[:, 1 : lm_model.dep_q + 1, :],
++                output_cache[:, 1 : lm_model.dep_q + 1, :],
+diff --git a/moshi/moshi/server.py b/moshi/moshi/server.py
+index 4dc33f5..98ad2b9 100644
+--- a/moshi/moshi/server.py
++++ b/moshi/moshi/server.py
+@@ -239,0 +240,2 @@ class ServerState:
++            #TODO: implement preplay function for audio conditioning
++            #TODO: implement audio saving function

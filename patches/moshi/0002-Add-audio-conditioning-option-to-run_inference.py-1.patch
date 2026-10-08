@@ -1,0 +1,147 @@
+diff --git a/moshi/moshi/run_inference.py b/moshi/moshi/run_inference.py
+index b642e31..c9f52d0 100644
+--- a/moshi/moshi/run_inference.py
++++ b/moshi/moshi/run_inference.py
+@@ -20,0 +21,2 @@ from .models import LMGen, LMModel, MimiModel, loaders
++from .utils.audioproc import load_audio
++import torch.nn.functional as F
+@@ -74,0 +77,3 @@ class InferenceState:
++        conditioning_wav: str | None = None,
++        conditioning_user_wav: str | None = None,
++        conditioning_txt: str | None = None,
+@@ -96,0 +102,115 @@ class InferenceState:
++        self.cond_audio = None
++        if conditioning_wav:
++            assert Path(conditioning_wav).exists(), f'No exist {conditioning_wav}'
++            self.cond_audio = load_audio(
++                    conditioning_wav,
++                    sample_rate=self.mimi.sample_rate
++                    )
++
++        #TODO: implement system text conditioning
++        self.cond_text_token = None
++        if conditioning_txt:
++            raise NotImplementedError("conditioning_txt is unsupported")
++        # if conditioning_txt:
++        #     assert self.cond_audio is not None, 'Required --conditioning_wav'
++        #     assert Path(conditioning_txt).exists(), f'No exist {conditioning_txt}'
++        #
++        #     # prepare interleaver
++        #     interleaver = CustomInterleaver(
++        #             text_tokenizer,
++        #             mimi.frame_rate,
++        #             lm.text_padding_token_id,
++        #             lm.end_of_text_padding_id,
++        #             lm.zero_token_id,
++        #             keep_main_only=True,
++        #             resegment_by_tokenizer=True,
++        #             device='cpu',
++        #             )
++        #
++        #     # get aligns
++        #     aligns, chs = load_alignments(conditioning_txt)
++        #     assert len(chs) == 1 and chs[0] == '0', '--conditioning_txt must include only channel "0"'
++        #
++        #     # tokenize
++        #     cond_audio_dur = self.cond_audio.shape[0] / self.mimi.sample_rate
++        #     self.cond_text_token = interleaver.prepare_item(
++        #             aligns,
++        #             cond_audio_dur,
++        #             main_speaker="0"
++        #             )[0].squeeze()     # [L, ]-shaped torch.tensor
++        #     #         ).squeeze()     # [L, ]-shaped torch.tensor
++
++        self.cond_user_audio = None
++        if conditioning_user_wav:
++            assert Path(conditioning_user_wav).exists(), f'No exist {conditioning_user_wav}'
++            self.cond_user_audio = load_audio(
++                conditioning_user_wav,
++                sample_rate=self.mimi.sample_rate
++            )
++
++    def apply_stereo_conditioning(self):
++        assert self.cond_audio is not None or self.cond_user_audio is not None
++        self.printer.log("info", "start stereo conditioning")
++
++        self.lm_gen.use_stereo_input = True
++        self.lm_gen.dialog_prompt_size = 100000
++
++        tokens = None
++        zero_chunk = torch.zeros(self.batch_size, 1, self.frame_size, dtype=torch.float32, device=self.device)
++
++        system_len = 0 if self.cond_audio is None else len(self.cond_audio)
++        user_len = 0 if self.cond_user_audio is None else len(self.cond_user_audio)
++        total_len = max(system_len, user_len)
++
++        for n, i in enumerate(range(0, total_len, self.frame_size)):
++            # system chunk
++            if self.cond_audio is None:
++                chunk_sys = zero_chunk
++            else:
++                sys_part = self.cond_audio[i: i + self.frame_size]
++                if sys_part.size(0) < self.frame_size:
++                    sys_part = F.pad(sys_part, (0, self.frame_size - sys_part.size(0)))
++                chunk_sys = sys_part.view(1, 1, self.frame_size).to(self.device)
++                chunk_sys = chunk_sys.expand(self.batch_size, -1, -1).contiguous()
++            codes_sys = self.mimi.encode(chunk_sys)
++
++            # user chunk
++            if self.cond_user_audio is None:
++                chunk_usr = zero_chunk
++            else:
++                usr_part = self.cond_user_audio[i: i + self.frame_size]
++                if usr_part.size(0) < self.frame_size:
++                    usr_part = F.pad(usr_part, (0, self.frame_size - usr_part.size(0)))
++                chunk_usr = usr_part.view(1, 1, self.frame_size).to(self.device)
++                chunk_usr = chunk_usr.expand(self.batch_size, -1, -1).contiguous()
++            codes_usr = self.mimi.encode(chunk_usr)
++
++            # create concatenated input codes
++            if self.cond_text_token is not None and n < len(self.cond_text_token):
++                raise NotImplementedError
++            #TMP     # w/ text tokens
++            #TMP     text_tok = self.cond_text_token[n:n+1].reshape(1, -1, 1).to(self.device)
++            #TMP     codes = torch.cat((text_tok, codes_sys, codes_usr), dim=1)
++            else:
++                # w/o text tokens
++                if tokens is None:
++                    assert self.lm_gen._streaming_state is not None
++                    text_in = self.lm_gen._streaming_state.initial[:, :1, :]
++                else:
++                    # use text token generated in the previous frame
++                    text_in = tokens[:, :1, :]
++                if text_in.shape[0] != self.batch_size:
++                    text_in = text_in.expand(self.batch_size, -1, -1).contiguous()
++                codes = torch.cat((text_in, codes_sys, codes_usr), dim=1)
++
++            # decode step-by-step
++            for c in range(codes.shape[-1]):
++                tokens = self.lm_gen.step(codes[:, :, c: c + 1])
++                if tokens is None:
++                    continue
++
++        self.lm_gen.use_stereo_input = False
++        self.lm_gen.dialog_prompt_size = 0
++        torch.cuda.synchronize()
++        self.printer.log("info", "stereo conditioning finished")
++
+@@ -117,0 +238,4 @@ class InferenceState:
++
++        if self.cond_audio is not None or self.cond_user_audio is not None:
++            self.apply_stereo_conditioning()
++
+@@ -120 +244,2 @@ class InferenceState:
+-        first_frame = True
++        first_frame = self.cond_audio is None and self.cond_user_audio is None
++        # first_frame = True
+@@ -260,0 +386,6 @@ def main():
++    parser.add_argument("--conditioning-wav", type=str,
++                        help="Audio used for conditioning in speech")
++    parser.add_argument("--conditioning-txt", type=str,
++                        help="Alignment text correspond to conditioning_wav")
++    parser.add_argument("--conditioning-user-wav", type=str,
++                        help="Audio used for conditioning on the user channel")
+@@ -299,0 +431,3 @@ def main():
++        conditioning_wav=args.conditioning_wav,
++        conditioning_txt=args.conditioning_txt,
++        conditioning_user_wav=args.conditioning_user_wav,
