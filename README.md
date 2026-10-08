@@ -6,7 +6,7 @@ It covers English and Japanese, including casual conversation and multi-turn QA.
 
 ## Contents
 - [Installation](#installation)
-- [Data Preparation](#data-preparation-wip)
+- [Data Preparation (WIP)](#data-preparation-wip)
 - [Evaluation](#evaluation)
 - [Inference](#inference)
 - [Benchmark Specification](#benchmark-specification)
