@@ -4,7 +4,177 @@ M3-DuplexBench evaluates interaction timing and response content in full-duplex
 spoken dialogue models under controlled single-turn and multi-turn conditions.
 It covers English and Japanese, including casual conversation and multi-turn QA.
 
-## Contents
+## 📊 Evaluation Results
+The following are the evaluation results under three different contextual settings.
+See [our paper](#citation) for details.
+
+<details>
+<summary>Single-turn evaluation</summary>
+
+No preceding dialogue history is provided to the model.
+Values are reported as mean ± 95% confidence interval.
+
+<table>
+<thead>
+<tr>
+  <th rowspan="3">Model</th>
+  <th colspan="8">Chat (Real data)</th>
+  <th colspan="6">Multi-turn QA (Synthetic data)</th>
+</tr>
+<tr>
+  <th colspan="2">Smooth turn-taking</th>
+  <th colspan="2">Pause handling</th>
+  <th>User backchannel</th>
+  <th>User barge-in</th>
+  <th colspan="2">Response quality</th>
+  <th colspan="2">Smooth turn-taking</th>
+  <th>User barge-in</th>
+  <th colspan="3">Response quality</th>
+</tr>
+<tr>
+  <th>TOR ↑</th>
+  <th>Latency ↓</th>
+  <th>TOR ↓</th>
+  <th>Latency ↑</th>
+  <th>Stop latency ↑</th>
+  <th>Stop latency ↓</th>
+  <th>Relevance ↑</th>
+  <th>Consistency ↑</th>
+  <th>TOR ↑</th>
+  <th>Latency ↓</th>
+  <th>Stop latency ↓</th>
+  <th>Relevance ↑</th>
+  <th>Consistency ↑</th>
+  <th>QA Score ↑</th>
+</tr>
+</thead>
+<tbody>
+<tr><th colspan="15">English</th></tr>
+<tr><td>DuplexCascade</td><td>72.7±5.5</td><td>4.70±0.42</td><td><strong>0.3</strong>±0.5</td><td><strong>6.91</strong>±0.30</td><td>—</td><td>—</td><td>61.3±2.6</td><td>77.7±3.2</td><td>92.4±2.3</td><td>2.78±0.10</td><td>—</td><td>63.0±2.2</td><td><strong>70.2</strong>±2.4</td><td><strong>19.8</strong>±2.6</td></tr>
+<tr><td>Freeze-Omni</td><td>82.7±4.6</td><td>3.06±0.35</td><td>12.5±3.3</td><td>5.55±0.38</td><td>—</td><td>—</td><td>70.4±3.2</td><td>80.2±3.2</td><td>90.5±2.5</td><td>1.71±0.13</td><td>—</td><td>62.6±2.4</td><td>61.4±2.9</td><td>16.7±2.5</td></tr>
+<tr><td>BayLing-Duplex</td><td>85.4±4.3</td><td>2.49±0.17</td><td>14.8±3.5</td><td>3.66±0.29</td><td>—</td><td>—</td><td>72.5±3.6</td><td>59.4±4.0</td><td>87.5±2.8</td><td>2.91±0.14</td><td>—</td><td>71.3±2.4</td><td>62.4±2.8</td><td>19.6±2.6</td></tr>
+<tr><td>Moshi</td><td>42.3±6.0</td><td>2.14±0.56</td><td>39.8±4.8</td><td>4.57±0.48</td><td>—</td><td>—</td><td>62.3±2.9</td><td>63.9±3.2</td><td>41.8±4.2</td><td>2.46±0.39</td><td>—</td><td>60.6±2.1</td><td>54.1±2.2</td><td>11.1±2.2</td></tr>
+<tr><td>Moshi-RL</td><td>95.8±2.5</td><td>2.15±0.32</td><td>35.5±4.7</td><td>1.73±0.23</td><td>—</td><td>—</td><td><strong>78.3</strong>±3.1</td><td>68.3±3.3</td><td>97.0±1.5</td><td>2.44±0.22</td><td>—</td><td>68.4±2.3</td><td>50.2±2.1</td><td>14.6±2.4</td></tr>
+<tr><td>PersonaPlex</td><td>94.6±2.8</td><td>0.78±0.14</td><td>32.5±4.6</td><td>3.29±0.35</td><td>—</td><td>—</td><td>70.8±3.4</td><td>72.3±3.3</td><td>97.2±1.4</td><td>0.38±0.03</td><td>—</td><td>76.9±2.4</td><td>56.9±2.9</td><td>15.7±2.3</td></tr>
+<tr><td>PersonaPlex-RL</td><td><strong>99.2</strong>±1.1</td><td><strong>0.59</strong>±0.07</td><td>17.0±3.7</td><td>2.40±0.17</td><td>—</td><td>—</td><td>77.1±3.2</td><td><strong>78.7</strong>±3.2</td><td><strong>97.9</strong>±1.2</td><td><strong>0.31</strong>±0.01</td><td>—</td><td><strong>79.9</strong>±2.3</td><td>59.5±2.9</td><td>17.9±2.5</td></tr>
+<tr><th colspan="15">Japanese</th></tr>
+<tr><td>J-Moshi</td><td>69.9±4.8</td><td><strong>1.65</strong>±0.25</td><td><strong>23.4</strong>±4.6</td><td><strong>5.82</strong>±0.46</td><td>—</td><td>—</td><td><strong>71.2</strong>±3.2</td><td><strong>88.4</strong>±2.4</td><td>90.8±2.5</td><td><strong>1.08</strong>±0.14</td><td>—</td><td><strong>58.0</strong>±2.2</td><td><strong>63.0</strong>±2.5</td><td><strong>11.5</strong>±2.2</td></tr>
+<tr><td>LLM-jp-Moshi</td><td><strong>96.3</strong>±2.0</td><td>2.81±0.25</td><td>28.5±4.9</td><td>3.36±0.31</td><td>—</td><td>—</td><td>59.9±2.3</td><td>79.4±2.7</td><td><strong>92.4</strong>±2.3</td><td>2.76±0.20</td><td>—</td><td>52.2±1.8</td><td>61.0±2.4</td><td>10.2±1.9</td></tr>
+</tbody>
+</table>
+
+</details>
+
+<details>
+<summary>Multi-turn evaluation</summary>
+
+Free-running multi-turn evaluation with reference user history and model-generated system history.
+
+<table>
+<thead>
+<tr>
+  <th rowspan="3">Model</th>
+  <th colspan="8">Chat (Real data)</th>
+  <th colspan="6">Multi-turn QA (Synthetic data)</th>
+</tr>
+<tr>
+  <th colspan="2">Smooth turn-taking</th>
+  <th colspan="2">Pause handling</th>
+  <th>User backchannel</th>
+  <th>User barge-in</th>
+  <th colspan="2">Response quality</th>
+  <th colspan="2">Smooth turn-taking</th>
+  <th>User barge-in</th>
+  <th colspan="3">Response quality</th>
+</tr>
+<tr>
+  <th>TOR ↑</th>
+  <th>Latency ↓</th>
+  <th>TOR ↓</th>
+  <th>Latency ↑</th>
+  <th>Stop latency ↑</th>
+  <th>Stop latency ↓</th>
+  <th>Relevance ↑</th>
+  <th>Consistency ↑</th>
+  <th>TOR ↑</th>
+  <th>Latency ↓</th>
+  <th>Stop latency ↓</th>
+  <th>Relevance ↑</th>
+  <th>Consistency ↑</th>
+  <th>QA Score ↑</th>
+</tr>
+</thead>
+<tbody>
+<tr><th colspan="15">English</th></tr>
+<tr><td>DuplexCascade</td><td>69.6±5.6</td><td>4.92±0.43</td><td><strong>0.3</strong>±0.5</td><td><strong>7.58</strong>±0.28</td><td>0.41±0.25</td><td><strong>0.35</strong>±0.21</td><td>64.8±2.9</td><td>77.7±3.2</td><td>85.8±3.0</td><td>2.99±0.17</td><td>2.91±0.41</td><td>61.3±2.2</td><td>60.2±2.9</td><td>24.2±2.5</td></tr>
+<tr><td>Freeze-Omni</td><td>80.0±4.9</td><td>2.66±0.30</td><td>61.8±4.8</td><td>1.90±0.48</td><td>2.21±0.45</td><td>1.71±0.39</td><td>59.4±2.9</td><td>68.7±3.3</td><td>85.4±3.0</td><td>2.24±0.19</td><td>2.43±0.26</td><td>56.0±2.3</td><td>53.5±2.6</td><td>17.0±2.7</td></tr>
+<tr><td>BayLing-Duplex</td><td>88.8±3.9</td><td>1.67±0.14</td><td>33.3±4.6</td><td>2.05±0.27</td><td>1.68±0.59</td><td>1.69±0.58</td><td>70.0±3.4</td><td>60.4±3.7</td><td>91.7±2.4</td><td>1.89±0.12</td><td>1.76±0.28</td><td>61.9±2.2</td><td>51.4±2.9</td><td>17.5±2.6</td></tr>
+<tr><td>Moshi</td><td>73.1±5.4</td><td>1.60±0.35</td><td>25.5±4.3</td><td>4.82±0.42</td><td>1.84±0.63</td><td>1.03±0.22</td><td>77.7±3.3</td><td>88.3±2.9</td><td>79.8±3.4</td><td>1.79±0.25</td><td>2.26±0.27</td><td>72.3±2.3</td><td>64.0±2.8</td><td>21.6±2.8</td></tr>
+<tr><td>Moshi-RL</td><td><strong>95.8</strong>±2.5</td><td><strong>0.58</strong>±0.15</td><td>25.5±4.3</td><td>2.22±0.24</td><td>1.25±0.35</td><td>1.12±0.22</td><td><strong>82.7</strong>±3.1</td><td><strong>93.7</strong>±2.1</td><td><strong>94.3</strong>±2.0</td><td>1.02±0.18</td><td>1.95±0.24</td><td><strong>77.9</strong>±2.3</td><td>65.1±2.7</td><td>24.0±2.8</td></tr>
+<tr><td>PersonaPlex</td><td>89.2±3.8</td><td>1.41±0.25</td><td>33.3±4.6</td><td>3.00±0.38</td><td>4.07±0.85</td><td>2.06±0.63</td><td>66.7±3.2</td><td>79.8±3.2</td><td>90.2±2.5</td><td>0.35±0.02</td><td><strong>1.28</strong>±0.16</td><td>76.5±2.3</td><td><strong>67.6</strong>±2.7</td><td>25.5±2.7</td></tr>
+<tr><td>PersonaPlex-RL</td><td>93.1±3.1</td><td>0.97±0.24</td><td>36.5±4.7</td><td>1.61±0.20</td><td><strong>4.19</strong>±0.89</td><td>1.86±0.54</td><td>72.9±3.2</td><td>86.9±2.7</td><td>90.7±2.5</td><td><strong>0.32</strong>±0.05</td><td>1.50±0.20</td><td>77.7±2.3</td><td>66.8±2.7</td><td><strong>26.2</strong>±2.8</td></tr>
+<tr><th colspan="15">Japanese</th></tr>
+<tr><td>J-Moshi</td><td>31.5±4.9</td><td><strong>1.90</strong>±0.47</td><td><strong>22.8</strong>±4.5</td><td><strong>7.02</strong>±0.50</td><td>2.51±1.23</td><td><strong>2.35</strong>±0.52</td><td><strong>61.2</strong>±3.7</td><td><strong>91.7</strong>±2.0</td><td>77.9±3.6</td><td><strong>0.87</strong>±0.15</td><td><strong>2.04</strong>±0.27</td><td><strong>49.7</strong>±2.0</td><td><strong>63.9</strong>±2.5</td><td><strong>11.8</strong>±2.2</td></tr>
+<tr><td>LLM-jp-Moshi</td><td><strong>84.0</strong>±3.9</td><td>2.26±0.29</td><td>69.1±5.0</td><td>0.87±0.36</td><td><strong>3.07</strong>±0.64</td><td>2.73±0.37</td><td>59.7±2.5</td><td>81.7±2.6</td><td><strong>84.1</strong>±3.2</td><td>1.87±0.22</td><td>2.33±0.28</td><td>45.4±2.0</td><td>57.5±2.3</td><td>10.5±2.0</td></tr>
+</tbody>
+</table>
+
+</details>
+
+<details>
+<summary>Multi-turn evaluation (Reference-conditioned)</summary>
+
+Multi-turn evaluation conditioned on the reference histories of both the user and the system.
+
+<table>
+<thead>
+<tr>
+  <th rowspan="3">Model</th>
+  <th colspan="8">Chat (Real data)</th>
+  <th colspan="6">Multi-turn QA (Synthetic data)</th>
+</tr>
+<tr>
+  <th colspan="2">Smooth turn-taking</th>
+  <th colspan="2">Pause handling</th>
+  <th>User backchannel</th>
+  <th>User barge-in</th>
+  <th colspan="2">Response quality</th>
+  <th colspan="2">Smooth turn-taking</th>
+  <th>User barge-in</th>
+  <th colspan="3">Response quality</th>
+</tr>
+<tr>
+  <th>TOR ↑</th>
+  <th>Latency ↓</th>
+  <th>TOR ↓</th>
+  <th>Latency ↑</th>
+  <th>Stop latency ↑</th>
+  <th>Stop latency ↓</th>
+  <th>Relevance ↑</th>
+  <th>Consistency ↑</th>
+  <th>TOR ↑</th>
+  <th>Latency ↓</th>
+  <th>Stop latency ↓</th>
+  <th>Relevance ↑</th>
+  <th>Consistency ↑</th>
+  <th>QA Score ↑</th>
+</tr>
+</thead>
+<tbody>
+<tr><th colspan="15">English</th></tr>
+<tr><td>Moshi</td><td>61.5±6.0</td><td>1.11±0.31</td><td><strong>7.5</strong>±2.6</td><td><strong>7.34</strong>±0.36</td><td>3.04±0.57</td><td>1.75±0.38</td><td>66.9±3.2</td><td>90.6±2.4</td><td>91.9±2.3</td><td>0.41±0.09</td><td>2.23±0.26</td><td>72.8±2.4</td><td>70.5±2.6</td><td>26.6±3.0</td></tr>
+<tr><td>Moshi-RL</td><td>92.3±3.3</td><td>0.72±0.17</td><td>17.8±3.8</td><td>2.76±0.26</td><td>2.41±0.50</td><td><strong>1.07</strong>±0.19</td><td>72.3±3.3</td><td><strong>94.8</strong>±2.0</td><td>94.1±2.0</td><td>0.34±0.05</td><td>1.82±0.24</td><td>71.9±2.5</td><td>69.7±2.5</td><td>26.8±2.9</td></tr>
+<tr><td>PersonaPlex</td><td>93.1±3.1</td><td>0.65±0.12</td><td>26.3±4.3</td><td>3.76±0.36</td><td><strong>5.31</strong>±0.71</td><td>2.30±0.52</td><td>75.8±3.1</td><td>89.8±2.5</td><td>96.4±1.6</td><td>0.28±0.01</td><td><strong>1.05</strong>±0.13</td><td><strong>82.0</strong>±2.2</td><td>73.9±2.6</td><td><strong>33.0</strong>±3.1</td></tr>
+<tr><td>PersonaPlex-RL</td><td><strong>97.7</strong>±1.8</td><td><strong>0.62</strong>±0.14</td><td>31.5±4.6</td><td>2.27±0.24</td><td>4.67±0.63</td><td>2.00±0.46</td><td><strong>77.5</strong>±3.2</td><td>89.2±2.5</td><td><strong>97.9</strong>±1.2</td><td><strong>0.27</strong>±0.03</td><td>1.19±0.16</td><td>81.6±2.2</td><td><strong>75.1</strong>±2.5</td><td>31.7±3.1</td></tr>
+<tr><th colspan="15">Japanese</th></tr>
+<tr><td>J-Moshi</td><td>61.6±5.1</td><td><strong>0.88</strong>±0.22</td><td>34.8±5.1</td><td><strong>5.06</strong>±0.50</td><td>1.98±0.63</td><td><strong>1.25</strong>±0.28</td><td><strong>63.0</strong>±2.8</td><td>87.1±2.5</td><td><strong>90.6</strong>±2.6</td><td><strong>0.31</strong>±0.04</td><td><strong>1.42</strong>±0.19</td><td>50.9±1.8</td><td>60.8±2.3</td><td><strong>14.6</strong>±2.3</td></tr>
+<tr><td>LLM-jp-Moshi</td><td><strong>88.3</strong>±3.4</td><td>1.34±0.21</td><td><strong>26.7</strong>±4.8</td><td>4.50±0.39</td><td><strong>2.25</strong>±0.53</td><td>1.86±0.32</td><td>62.2±2.7</td><td><strong>90.0</strong>±2.2</td><td>90.4±2.6</td><td>0.69±0.12</td><td>1.59±0.21</td><td><strong>51.4</strong>±1.7</td><td><strong>61.3</strong>±2.4</td><td>14.3±2.3</td></tr>
+</tbody>
+</table>
+
+</details>
+
+## Documents 
 - [Installation](#installation)
 - [Data Preparation (WIP)](#data-preparation-wip)
 - [Evaluation](#evaluation)
@@ -420,18 +590,6 @@ Recognized event types are `TURN`, `TURN_SHIFT`, `TURN_HOLD`, `SHORTPAUSE`, `BC`
 and `BARGE_IN`. `TURN` annotations mark inter-pausal units; the remaining types
 identify evaluation events.
 
-### Supported models
-| Model | Single-turn (no context) | Multi-turn (generated context) | Multi-turn (reference context) |
-| ---- | :----: | :----: | :----: |
-| Moshi and Moshi-based variants (offline) | ✔︎ | ✔︎ | ✔︎ |
-| PersonaPlex and PersonaPlex-RL (offline) | ✔︎ | ✔︎ | ✔︎ |
-| BayLing-Duplex (offline) | ✔︎ | ✔︎ | — |
-| Freeze-Omni (server-client) | ✔︎ | ✔︎ | — |
-| DuplexCascade (server-client) | ✔︎ | ✔︎ | — |
-
-Inference aliases and model-specific options are listed in
-[Model-Specific Options](#model-specific-options). `dummy` is available for testing.
-
 ### Evaluation metrics
 | Category | Dimension | Metric |
 |---|---|---|
@@ -444,6 +602,7 @@ Inference aliases and model-specific options are listed in
 | Content | QA accuracy (task domain only) | LLM-as-a-judge |
 
 The active dimensions are defined in [evaluation/registry.py](m3_duplexbench/evaluation/registry.py).
+
 ## Licence
 See [LICENCE](LICENCE.pdf) for details.
 
