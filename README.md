@@ -380,8 +380,8 @@ python -m m3_duplexbench.evaluation.run_evaluation \
   --transcript-dir "data/${LANG}/${DOMAIN}/${DATA}/txt_align"
 ```
 
-Then, export your OpenAI API key and submit the batches. Set the key locally;
-do not commit it to the repository. Batch completion is asynchronous.
+Then, export your OpenAI API key and submit the batches. Set the key locally.
+Batch completion is asynchronous.
 
 ```bash
 export OPENAI_API_KEY="YOUR_API_KEY"
